@@ -154,6 +154,7 @@ type Pool struct {
 
 	// Stack of idleConn with most recently used at the front.
 	idle list.List
+	pcPool sync.Pool
 }
 
 type idleConn struct {
@@ -168,6 +169,7 @@ func NewPool(newFn func() (Conn, error), maxIdle int) *Pool {
 	return &Pool{Dial: newFn, MaxIdle: maxIdle}
 }
 
+
 // Get gets a connection. The application must close the returned connection.
 // This method always returns a valid connection so that applications can defer
 // error handling to the first use of the connection. If there is an error
@@ -177,6 +179,11 @@ func (p *Pool) Get() Conn {
 	c, err := p.get()
 	if err != nil {
 		return errorConnection{err}
+	}
+	pc, ok := p.pcPool.Get().(*pooledConnection)
+	if ok {
+		pc.c = c
+		return pc
 	}
 	return &pooledConnection{p: p, c: c}
 }
@@ -265,7 +272,7 @@ func (p *Pool) get() (Conn, error) {
 
 		if p.closed {
 			p.mu.Unlock()
-			return nil, errors.New("redigo: get on closed pool")
+			return nil, errPoolClosed
 		}
 
 		// Dial new connection if under limit.
@@ -344,13 +351,13 @@ func initSentinel() {
 	}
 }
 
+// After close, struct will be reuse, you should not use pc object any more
 func (pc *pooledConnection) Close() error {
-	c := pc.c
-	if _, ok := c.(errorConnection); ok {
+	if pc.c == nil {
 		return nil
 	}
-	pc.c = errorConnection{errConnClosed}
-
+	c := pc.c
+	pc.c = nil
 	if pc.state&internal.MultiState != 0 {
 		c.Send("DISCARD")
 		pc.state &^= (internal.MultiState | internal.WatchState)
@@ -379,6 +386,7 @@ func (pc *pooledConnection) Close() error {
 	}
 	c.Do("")
 	pc.p.put(c, pc.state != 0)
+	pc.p.pcPool.Put(pc)
 	return nil
 }
 

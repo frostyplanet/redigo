@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"sync/atomic"
 )
 
 var errConnClosed = errors.New("redigo: connection closed")
@@ -36,7 +37,7 @@ type conn struct {
 
 	// Shared
 	mu      sync.Mutex
-	pending int
+	pending int32
 	err     error
 	conn    net.Conn
 
@@ -518,9 +519,7 @@ func (c *conn) readReply() (interface{}, error) {
 }
 
 func (c *conn) Send(cmd string, args ...interface{}) error {
-	c.mu.Lock()
-	c.pending += 1
-	c.mu.Unlock()
+	atomic.AddInt32(&c.pending, int32(1))
 	if c.writeTimeout != 0 {
 		c.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout))
 	}
@@ -554,11 +553,7 @@ func (c *conn) Receive() (reply interface{}, err error) {
 	//
 	// The pending field is decremented after the reply is read to handle the
 	// case where Receive is called before Send.
-	c.mu.Lock()
-	if c.pending > 0 {
-		c.pending -= 1
-	}
-	c.mu.Unlock()
+	atomic.AddInt32(&c.pending, int32(-1))
 	if err, ok := reply.(Error); ok {
 		return nil, err
 	}
@@ -566,10 +561,8 @@ func (c *conn) Receive() (reply interface{}, err error) {
 }
 
 func (c *conn) Do(cmd string, args ...interface{}) (interface{}, error) {
-	c.mu.Lock()
-	pending := c.pending
-	c.pending = 0
-	c.mu.Unlock()
+	var pending int32
+	pending = atomic.SwapInt32(&c.pending, 0)
 
 	if cmd == "" && pending == 0 {
 		return nil, nil
@@ -594,7 +587,7 @@ func (c *conn) Do(cmd string, args ...interface{}) (interface{}, error) {
 	}
 
 	if cmd == "" {
-		reply := make([]interface{}, pending)
+		reply := make([]interface{}, int(pending))
 		for i := range reply {
 			r, e := c.readReply()
 			if e != nil {
@@ -607,7 +600,7 @@ func (c *conn) Do(cmd string, args ...interface{}) (interface{}, error) {
 
 	var err error
 	var reply interface{}
-	for i := 0; i <= pending; i++ {
+	for i := 0; i <= int(pending); i++ {
 		var e error
 		if reply, e = c.readReply(); e != nil {
 			return nil, c.fatal(e)

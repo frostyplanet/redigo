@@ -29,6 +29,8 @@ import (
 	"time"
 )
 
+var errConnClosed = errors.New("redigo: connection closed")
+
 // conn is the low-level implementation of Conn
 type conn struct {
 
@@ -279,7 +281,7 @@ func (c *conn) Close() error {
 	c.mu.Lock()
 	err := c.err
 	if c.err == nil {
-		c.err = errors.New("redigo: closed")
+		c.err = errConnClosed
 		err = c.conn.Close()
 	}
 	c.mu.Unlock()

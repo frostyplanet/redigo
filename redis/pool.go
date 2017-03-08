@@ -37,7 +37,6 @@ var ErrPoolExhausted = errors.New("redigo: connection pool exhausted")
 
 var (
 	errPoolClosed = errors.New("redigo: connection pool closed")
-	errConnClosed = errors.New("redigo: connection closed")
 )
 
 // Pool maintains a pool of connections. The application calls the Get method
